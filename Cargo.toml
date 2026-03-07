@@ -1,0 +1,9 @@
+[package]
+name = "websocket-server-from-scratch"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+base64 = "0.22.1"
+nix = { version = "0.31.2", features = ["net", "process"] }
+sha1 = "0.10.6"
