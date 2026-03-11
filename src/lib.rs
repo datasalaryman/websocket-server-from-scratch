@@ -7,12 +7,13 @@ use std::os::fd::AsRawFd;
 
 pub mod request;
 pub mod response;
+pub mod message;
 pub use request::{Request, RequestError, BadRequestError, MethodNotAllowedError};
 pub use response::{Response};
 
 use crate::response::{InternalServerError, NotFoundError, ResponseError};
-
-pub fn handle_client(fd: RawFd) -> () {
+use crate::message::{Message};
+pub fn handle_handshake(fd: RawFd) -> () {
     
     let mut buf = [0u8; 1024];
     let n = recv(fd, &mut buf, MsgFlags::empty()).unwrap();
@@ -45,6 +46,17 @@ pub fn handle_client(fd: RawFd) -> () {
     send(fd, response_string.as_bytes(), MsgFlags::empty());
 }
 
+pub fn handle_session(fd: RawFd) -> () {
+
+    loop {
+
+        let message = Message::from(fd);
+
+        println!("{:?}", message);
+
+    }
+
+}
 pub fn run() {
     let sock_addr = SockaddrIn::from_str("0.0.0.0:3000").unwrap(); 
 
@@ -56,14 +68,21 @@ pub fn run() {
 
     listen(&fd, Backlog::new(128).unwrap()).unwrap();
 
+    let mut client_fd : i32;
+
     loop {
-        let client_fd = accept(fd.as_raw_fd()).unwrap();
+        client_fd = accept(fd.as_raw_fd()).unwrap();
 
         println!("IPV4 Address: {:?}, Port: {:?}", &sock_addr.ip(), &sock_addr.port());
         println!("File descriptor: {:?}", &fd);
-        handle_client(client_fd);
+        handle_handshake(client_fd);
+
+        handle_session(client_fd); 
 
         close(client_fd).unwrap(); 
+
+
     }
 
+    
 }
