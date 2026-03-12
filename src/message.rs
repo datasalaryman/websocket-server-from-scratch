@@ -33,11 +33,11 @@ impl TryFrom<Vec<u8>> for ExtendedPayloadLen {
             0 => Ok(Self::Zero(0 as u8)),
             16 => {
                 let bytes: [u8; 2] = value.as_slice().try_into().unwrap();
-                Ok(Self::One(u16::from_le_bytes(bytes)))
+                Ok(Self::One(u16::from_be_bytes(bytes)))
             }
             64 => {
                 let bytes: [u8; 8] = value.as_slice().try_into().unwrap();
-                Ok(Self::Two(u64::from_le_bytes(bytes)))
+                Ok(Self::Two(u64::from_be_bytes(bytes)))
             }
             _ => Err(WrongLengthSpeficied),
         };
@@ -54,13 +54,13 @@ impl From<ExtendedPayloadLen> for usize {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Frame {
     pub fin: bool,
     pub opcode: u8,
     pub masked: bool,
-    pub masking_key: String,
-    pub payload_data: String,
+    pub masking_key: [u8; 4],
+    pub payload: String,
 }
 
 #[derive(Debug)]
@@ -89,54 +89,42 @@ impl Frame {
 
         let fin = (header_buf[0] & 0x80) != 0;
         let opcode = header_buf[0] & 0x0F;
+
         let masked = (header_buf[0] & 0x80) != 0;
-        let payload_len = (header_buf[1] & 0x7F) as u64;
+        let mut payload_len = (header_buf[1] & 0x7F) as u64;
 
-        let mut extended_payload_len_buffer: Vec<u8> = vec![];
-
-        if payload_len == 127 {
-            total_read = 0;
-            while total_read < 2 {
-                let n = recv(
-                    fd,
-                    &mut extended_payload_len_buffer[total_read..],
-                    MsgFlags::empty(),
-                )
-                .unwrap();
-
-                if n == 0 {
-                    break;
+        let mut extended_len_bytes = 0;
+        if payload_len == 126 {
+            extended_len_bytes = 2;
+        } else if payload_len == 127 {
+            extended_len_bytes = 8;
+        }
+    
+        // Read extended length if needed
+        let mut extended_buf = [0u8; 8];
+        if extended_len_bytes > 0 {
+            let mut read = 0;
+            while read < extended_len_bytes {
+                let n = recv(fd, &mut extended_buf[read..extended_len_bytes], MsgFlags::empty()).unwrap();
+                if n == 0 { 
+                    break; 
                 }
-
-                total_read += n;
+                read += n;
             }
-        } else if payload_len == 128 {
-            total_read = 0;
-            while total_read < 8 {
-                let n = recv(
-                    fd,
-                    &mut extended_payload_len_buffer[total_read..],
-                    MsgFlags::empty(),
-                )
-                .unwrap();
-
-                if n == 0 {
-                    break;
-                }
-
-                total_read += n;
-            }
+        
+            payload_len = match extended_len_bytes {
+                2 => u16::from_be_bytes([extended_buf[0], extended_buf[1]]) as u64,
+                8 => u64::from_be_bytes(extended_buf),
+                _ => payload_len,
+            };
         }
 
-        let extended_payload_len =
-            ExtendedPayloadLen::try_from(extended_payload_len_buffer).unwrap();
-
-        let mut masking_key_buffer = [0u8; 4];
+        let mut masking_key = [0u8; 4];
 
         if masked {
             total_read = 0;
             while total_read < 4 {
-                let n = recv(fd, &mut masking_key_buffer[total_read..], MsgFlags::empty()).unwrap();
+                let n = recv(fd, &mut masking_key[total_read..], MsgFlags::empty()).unwrap();
 
                 if n == 0 {
                     break;
@@ -146,81 +134,183 @@ impl Frame {
             }
         }
 
-        let masking_key = String::from_utf8_lossy(&masking_key_buffer).to_string();
+        let mut payload_buffer =  vec![0u8; payload_len as usize];
 
-        let mut payload_buffer: Vec<u8> = vec![];
+        let mut total_read = 0;
+        while total_read < payload_buffer.len() {
+            let n = recv(fd, &mut payload_buffer[total_read..], MsgFlags::empty()).unwrap();
 
-        if [126u64, 127u64].contains(&payload_len) {
-            total_read = 0;
-            let target_length = extended_payload_len.into();
-            while total_read < target_length {
-                let n = recv(fd, &mut payload_buffer[total_read..], MsgFlags::empty()).unwrap();
-
-                if n == 0 {
-                    break;
-                }
-
-                total_read += n;
+            if n == 0 {
+                break;
             }
-        } else {
-            total_read = 0;
-            while total_read < payload_len as usize {
-                let n = recv(fd, &mut payload_buffer[total_read..], MsgFlags::empty()).unwrap();
 
-                if n == 0 {
-                    break;
-                }
+            total_read += n;
+        };
 
-                total_read += n;
+        if masked {
+            for i in 0..payload_buffer.len() {
+                payload_buffer[i] ^= masking_key[i % 4];
             }
         }
 
-        let payload_data = String::from_utf8_lossy(&payload_buffer).to_string();
+        let payload = String::from_utf8_lossy(&payload_buffer).to_string();
+
 
         Ok(Self {
             fin,
             opcode,
             masked,
             masking_key,
-            payload_data,
+            payload,
         })
+    }
+
+    pub fn get_close_frame() -> Frame {
+
+        let frame = Frame {
+            fin: true, 
+            opcode: 8, 
+            masked: false, 
+            masking_key: [0u8; 4], 
+            payload: "".to_string()
+        };
+
+        return frame;
+    }
+
+    pub fn get_pong_frame() -> Frame {
+
+        let frame = Frame {
+            fin: true, 
+            opcode: 0x0A, 
+            masked: false, 
+            masking_key: [0u8; 4], 
+            payload: "".to_string()
+        };
+
+        return frame;
+    }
+
+    pub fn as_bytes(f: Frame) -> Vec<u8> {
+
+        let mut bytes : Vec<u8> = vec![];
+
+        let fin_opcode : u8 = ((f.fin as u8) << 7) | (f.opcode as u8);
+
+        bytes.push(fin_opcode);
+
+        println!("payload_len: {}", f.payload.len());
+
+        let mask_payload_len : u8 = ((0 as u8) << 7) | (f.payload.len() as u8);
+
+        bytes.push(mask_payload_len); 
+
+        return bytes;
     }
 }
 
-#[derive(Debug)]
-pub struct Message {
+
+#[derive(Debug, Clone)]
+pub struct ClientMessage {
     pub frames: Vec<Frame>,
+    pub opcode: u8, 
     pub message: String,
 }
 
-impl Message {
-    pub fn from(fd: RawFd) -> Message {
+impl ClientMessage {
+    pub fn from(fd: RawFd) -> ClientMessage {
         let mut frames: Vec<Frame> = vec![];
         let mut message: String = String::new();
         loop {
             let frame = Frame::try_from(fd).unwrap();
 
-            if frame.fin {
+            if frame.fin || frame.opcode == 0x8 {
                 frames.push(frame);
                 message = frames
                     .iter()
-                    .map(|x| x.payload_data.clone())
+                    .map(|x| x.payload.clone())
                     .collect::<Vec<String>>()
                     .join("");
                 break;
             } else {
                 frames.push(frame);
             }
+
         }
 
-        let message_struct = Message { frames, message };
+        let opcode = frames[0].opcode; 
+
+        let message_struct = ClientMessage { 
+            frames,
+            opcode, 
+            message 
+        };
 
         return message_struct;
     }
 }
 
-impl std::fmt::Display for Message {
+impl std::fmt::Display for ClientMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", self.message)
     }
 }
+
+#[derive(Debug)]
+pub struct OpcodeNotRecognizedError;
+
+impl std::fmt::Display for OpcodeNotRecognizedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "Invalid opcode specified, not recognized"
+        )
+    }
+}
+
+#[derive(Debug)]
+pub struct ServerMessage {
+    pub frames: Vec<Frame>, 
+    pub opcode: u8, 
+    pub message: String,
+}
+
+impl ServerMessage {
+    pub fn from(cmsg: &ClientMessage) -> Result<Self, OpcodeNotRecognizedError> {
+
+        type Error = OpcodeNotRecognizedError;
+        match cmsg.opcode {
+            // if text (1) or binary (2), send the message back to the client,
+            1 | 2 => return Ok(Self {
+                frames: cmsg.frames.clone(), 
+                opcode: cmsg.opcode, 
+                message: cmsg.message.clone(), 
+            }), 
+            // if close connection (8), send back close frame
+            8 => return Ok(Self {
+                frames: vec![(Frame::get_close_frame())], 
+                opcode: cmsg.opcode, 
+                message: cmsg.message.clone(), 
+            }), 
+
+            // if ping (9), send pong
+            9 => return Ok(Self {
+                frames: vec![(Frame::get_pong_frame())], 
+                opcode: 0x0A, 
+                message: cmsg.message.clone(), 
+            }),
+
+            _ => return Err(OpcodeNotRecognizedError), 
+
+        };
+    }
+
+}
+
+impl std::fmt::Display for ServerMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+

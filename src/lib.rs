@@ -5,6 +5,7 @@ use nix::sys::socket::{
 use nix::unistd::close;
 use std::os::fd::AsRawFd;
 use std::{os::fd::RawFd, str::FromStr};
+use hex;
 
 pub mod message;
 pub mod request;
@@ -12,7 +13,7 @@ pub mod response;
 pub use request::{BadRequestError, MethodNotAllowedError, Request, RequestError};
 pub use response::Response;
 
-use crate::message::Message;
+use crate::message::{Frame, ClientMessage, ServerMessage};
 use crate::response::{InternalServerError, NotFoundError, ResponseError};
 pub fn handle_handshake(fd: RawFd) -> () {
     let mut buf = [0u8; 1024];
@@ -47,9 +48,28 @@ pub fn handle_handshake(fd: RawFd) -> () {
 
 pub fn handle_session(fd: RawFd) -> () {
     loop {
-        let message = Message::from(fd);
+        let client_message = ClientMessage::from(fd);
+        println!("{:?}", client_message);
 
-        println!("{:?}", message);
+        let server_message = ServerMessage::from(&client_message).unwrap();
+
+        println!("{:?}", server_message);
+
+        let server_frame_bytes = Frame::as_bytes(server_message.frames[0].clone()); 
+
+        println!("{}", server_frame_bytes.iter().map(|b| format!("{:08b}", b)).collect::<String>());
+
+        match server_message.opcode { 
+            8 => {
+                println!("Client closed connection");
+                break; 
+            }, 
+            0x0A => {
+                println!("Sending pong");
+                send(fd, &server_frame_bytes, MsgFlags::empty());
+            }, 
+            _ => println!("handling cases later")
+        };
     }
 }
 pub fn run() {
@@ -71,19 +91,17 @@ pub fn run() {
 
     let mut client_fd: i32;
 
-    loop {
-        client_fd = accept(fd.as_raw_fd()).unwrap();
+    client_fd = accept(fd.as_raw_fd()).unwrap();
 
-        println!(
-            "IPV4 Address: {:?}, Port: {:?}",
-            &sock_addr.ip(),
-            &sock_addr.port()
-        );
-        println!("File descriptor: {:?}", &fd);
-        handle_handshake(client_fd);
+    println!(
+        "IPV4 Address: {:?}, Port: {:?}",
+        &sock_addr.ip(),
+        &sock_addr.port()
+    );
+    println!("File descriptor: {:?}", &fd);
+    handle_handshake(client_fd);
 
-        handle_session(client_fd);
+    handle_session(client_fd);
 
-        close(client_fd).unwrap();
-    }
+    close(client_fd).unwrap();
 }
