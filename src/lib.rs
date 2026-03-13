@@ -66,6 +66,7 @@ pub fn handle_session(fd: RawFd) -> () {
         match server_message.opcode {
             8 => {
                 println!("Client closed connection");
+                // send(fd, &server_frame_bytes, MsgFlags::empty());
                 break;
             }
             0x0A => {

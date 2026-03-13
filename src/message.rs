@@ -60,7 +60,7 @@ pub struct Frame {
     pub opcode: u8,
     pub masked: bool,
     pub masking_key: [u8; 4],
-    pub payload: String,
+    pub payload: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -139,11 +139,11 @@ impl Frame {
             }
         }
 
-        let mut payload_buffer = vec![0u8; payload_len as usize];
+        let mut payload = vec![0u8; payload_len as usize];
 
         let mut total_read = 0;
-        while total_read < payload_buffer.len() {
-            let n = recv(fd, &mut payload_buffer[total_read..], MsgFlags::empty()).unwrap();
+        while total_read < payload.len() {
+            let n = recv(fd, &mut payload[total_read..], MsgFlags::empty()).unwrap();
 
             if n == 0 {
                 break;
@@ -153,12 +153,10 @@ impl Frame {
         }
 
         if masked {
-            for i in 0..payload_buffer.len() {
-                payload_buffer[i] ^= masking_key[i % 4];
+            for i in 0..payload.len() {
+                payload[i] ^= masking_key[i % 4];
             }
         }
-
-        let payload = String::from_utf8_lossy(&payload_buffer).to_string();
 
         Ok(Self {
             fin,
@@ -175,19 +173,23 @@ impl Frame {
             opcode: 8,
             masked: false,
             masking_key: [0u8; 4],
-            payload: "".to_string(),
+            payload: "".to_string().into(),
         };
 
         return frame;
     }
 
-    pub fn get_pong_frame() -> Frame {
+    pub fn get_pong_frame(ping: &ClientMessage) -> Frame {
+
+        let ping_frame = ping.frames[0].clone();
+
+
         let frame = Frame {
             fin: true,
             opcode: 0x0A,
             masked: false,
             masking_key: [0u8; 4],
-            payload: "".to_string(),
+            payload: ping_frame.payload,
         };
 
         return frame;
@@ -205,6 +207,10 @@ impl Frame {
         let mask_payload_len: u8 = ((0 as u8) << 7) | (f.payload.len() as u8);
 
         bytes.push(mask_payload_len);
+
+        let payload = f.payload.clone();
+
+        bytes.extend(payload);
 
         return bytes;
     }
@@ -228,7 +234,7 @@ impl ClientMessage {
                 frames.push(frame);
                 message = frames
                     .iter()
-                    .map(|x| x.payload.clone())
+                    .map(|x| String::from_utf8_lossy(&x.payload.clone()).to_string())
                     .collect::<Vec<String>>()
                     .join("");
                 break;
@@ -295,7 +301,7 @@ impl ServerMessage {
             // if ping (9), send pong
             9 => {
                 return Ok(Self {
-                    frames: vec![(Frame::get_pong_frame())],
+                    frames: vec![(Frame::get_pong_frame(&cmsg))],
                     opcode: 0x0A,
                     message: cmsg.message.clone(),
                 });
