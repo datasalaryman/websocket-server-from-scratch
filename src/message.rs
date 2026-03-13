@@ -167,13 +167,16 @@ impl Frame {
         })
     }
 
-    pub fn get_close_frame() -> Frame {
+    pub fn get_close_frame(close: &ClientMessage) -> Frame {
+
+        let close_frame = close.frames[0].clone(); 
+
         let frame = Frame {
             fin: true,
             opcode: 8,
             masked: false,
             masking_key: [0u8; 4],
-            payload: "".to_string().into(),
+            payload: close_frame.payload,
         };
 
         return frame;
@@ -292,7 +295,7 @@ impl ServerMessage {
             // if close connection (8), send back close frame
             8 => {
                 return Ok(Self {
-                    frames: vec![(Frame::get_close_frame())],
+                    frames: vec![(Frame::get_close_frame(&cmsg))],
                     opcode: cmsg.opcode,
                     message: cmsg.message.clone(),
                 });
