@@ -5,16 +5,14 @@ use nix::sys::socket::{
 use nix::unistd::close;
 use std::os::fd::AsRawFd;
 use std::{os::fd::RawFd, str::FromStr};
-use hex;
 
+pub mod http;
 pub mod message;
-pub mod request;
-pub mod response;
-pub use request::{BadRequestError, MethodNotAllowedError, Request, RequestError};
-pub use response::Response;
-
-use crate::message::{Frame, ClientMessage, ServerMessage};
-use crate::response::{InternalServerError, NotFoundError, ResponseError};
+pub use crate::http::{
+    BadRequestError, InternalServerError, MethodNotAllowedError, NotFoundError, Request,
+    RequestError, Response, ResponseError,
+};
+pub use crate::message::{ClientMessage, Frame, ServerMessage};
 pub fn handle_handshake(fd: RawFd) -> () {
     let mut buf = [0u8; 1024];
     let n = recv(fd, &mut buf, MsgFlags::empty()).unwrap();
@@ -55,20 +53,26 @@ pub fn handle_session(fd: RawFd) -> () {
 
         println!("{:?}", server_message);
 
-        let server_frame_bytes = Frame::as_bytes(server_message.frames[0].clone()); 
+        let server_frame_bytes = Frame::as_bytes(server_message.frames[0].clone());
 
-        println!("{}", server_frame_bytes.iter().map(|b| format!("{:08b}", b)).collect::<String>());
+        println!(
+            "{}",
+            server_frame_bytes
+                .iter()
+                .map(|b| format!("{:08b}", b))
+                .collect::<String>()
+        );
 
-        match server_message.opcode { 
+        match server_message.opcode {
             8 => {
                 println!("Client closed connection");
-                break; 
-            }, 
+                break;
+            }
             0x0A => {
                 println!("Sending pong");
                 send(fd, &server_frame_bytes, MsgFlags::empty());
-            }, 
-            _ => println!("handling cases later")
+            }
+            _ => println!("handling cases later"),
         };
     }
 }
