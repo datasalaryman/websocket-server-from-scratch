@@ -217,6 +217,15 @@ impl Frame {
 
         return bytes;
     }
+
+    pub fn unmask(f: Frame) -> Frame {
+        let unmasked = Frame {
+            masked: false, 
+            ..f
+        };
+
+        return unmasked;
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -287,7 +296,10 @@ impl ServerMessage {
             // if text (1) or binary (2), send the message back to the client,
             1 | 2 => {
                 return Ok(Self {
-                    frames: cmsg.frames.clone(),
+                    frames: cmsg.frames
+                        .iter()
+                        .map(|x| Frame::unmask(x.clone()))
+                        .collect(),
                     opcode: cmsg.opcode,
                     message: cmsg.message.clone(),
                 });

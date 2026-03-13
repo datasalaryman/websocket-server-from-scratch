@@ -53,28 +53,40 @@ pub fn handle_session(fd: RawFd) -> () {
 
         println!("{:?}", server_message);
 
-        let server_frame_bytes = Frame::as_bytes(server_message.frames[0].clone());
+        for frame in server_message.frames {
+            let server_frame_bytes = Frame::as_bytes(frame.clone());
 
-        println!(
-            "{}",
-            server_frame_bytes
-                .iter()
-                .map(|b| format!("{:08b}", b))
-                .collect::<String>()
-        );
+            println!(
+                "{}",
+                server_frame_bytes
+                    .iter()
+                    .map(|b| format!("{:08b}", b))
+                    .collect::<String>()
+            );
 
-        match server_message.opcode {
-            8 => {
-                println!("Client closed connection");
-                // send(fd, &server_frame_bytes, MsgFlags::empty());
-                break;
-            }
-            0x0A => {
-                println!("Sending pong");
-                send(fd, &server_frame_bytes, MsgFlags::empty());
-            }
-            _ => println!("handling cases later"),
-        };
+            match server_message.opcode {
+                1 | 2 => {
+                    println!("Sending payload back to client");
+                    send(fd, &server_frame_bytes, MsgFlags::empty());
+                }, 
+                8 => {
+                    println!("Client closed connection");
+                    // send(fd, &server_frame_bytes, MsgFlags::empty());
+                    break;
+                }
+                0x0A => {
+                    println!("Sending pong");
+                    send(fd, &server_frame_bytes, MsgFlags::empty());
+                }
+                _ => println!("handling cases later"),
+            };
+
+        }; 
+
+
+        
+
+        
     }
 }
 pub fn run() {
