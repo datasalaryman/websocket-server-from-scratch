@@ -1,58 +1,10 @@
 use nix::{
-    NixPath,
     sys::socket::{
-        AddressFamily, Backlog, MsgFlags, SockFlag, SockType, SockaddrIn, accept, bind, listen,
-        recv, send, setsockopt, socket, sockopt::ReuseAddr,
+        MsgFlags, 
+        recv, 
     },
 };
-use std::{os::fd::RawFd, str::FromStr};
-
-#[derive(Debug)]
-pub enum ExtendedPayloadLen {
-    Zero(u8), // when 0
-    One(u16),
-    Two(u64),
-}
-
-#[derive(Debug)]
-pub struct WrongLengthSpeficied;
-
-impl std::fmt::Display for WrongLengthSpeficied {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "Invalid expected payload length specified, can only accept 0, 16, or 64 bits"
-        )
-    }
-}
-
-impl TryFrom<Vec<u8>> for ExtendedPayloadLen {
-    type Error = WrongLengthSpeficied;
-    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
-        return match value.len() {
-            0 => Ok(Self::Zero(0 as u8)),
-            16 => {
-                let bytes: [u8; 2] = value.as_slice().try_into().unwrap();
-                Ok(Self::One(u16::from_be_bytes(bytes)))
-            }
-            64 => {
-                let bytes: [u8; 8] = value.as_slice().try_into().unwrap();
-                Ok(Self::Two(u64::from_be_bytes(bytes)))
-            }
-            _ => Err(WrongLengthSpeficied),
-        };
-    }
-}
-
-impl From<ExtendedPayloadLen> for usize {
-    fn from(id: ExtendedPayloadLen) -> usize {
-        match id {
-            ExtendedPayloadLen::Zero(v) => v as usize,
-            ExtendedPayloadLen::One(v) => v as usize,
-            ExtendedPayloadLen::Two(v) => v as usize,
-        }
-    }
-}
+use std::{os::fd::RawFd};
 
 #[derive(Debug, Clone)]
 pub struct Frame {
