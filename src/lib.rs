@@ -3,8 +3,7 @@ use nix::sys::socket::{
     send, setsockopt, socket, sockopt::ReuseAddr,
 };
 use nix::unistd::close;
-use std::os::fd::AsRawFd;
-use std::{os::fd::RawFd, str::FromStr};
+use std::{os::fd::{AsRawFd, RawFd}, str::FromStr, thread};
 
 pub mod http;
 pub mod message;
@@ -71,7 +70,7 @@ pub fn handle_session(fd: RawFd) -> () {
                 }, 
                 8 => {
                     println!("Client closed connection");
-                    // send(fd, &server_frame_bytes, MsgFlags::empty());
+                    close(fd).unwrap();
                     break;
                 }
                 0x0A => {
@@ -81,12 +80,11 @@ pub fn handle_session(fd: RawFd) -> () {
                 _ => println!("handling cases later"),
             };
 
+        };
+
+        if server_message.opcode == 8 {
+            break;
         }; 
-
-
-        
-
-        
     }
 }
 pub fn run() {
@@ -105,20 +103,23 @@ pub fn run() {
     bind(fd.as_raw_fd(), &sock_addr).unwrap();
 
     listen(&fd, Backlog::new(128).unwrap()).unwrap();
-
+    
     let mut client_fd: i32;
 
-    client_fd = accept(fd.as_raw_fd()).unwrap();
+    loop {
+        
+        client_fd = accept(fd.as_raw_fd()).unwrap();
+    
+        println!(
+            "IPV4 Address: {:?}, Port: {:?}",
+            &sock_addr.ip(),
+            &sock_addr.port()
+        );
+        println!("File descriptor: {:?}", &fd);
 
-    println!(
-        "IPV4 Address: {:?}, Port: {:?}",
-        &sock_addr.ip(),
-        &sock_addr.port()
-    );
-    println!("File descriptor: {:?}", &fd);
-    handle_handshake(client_fd);
-
-    handle_session(client_fd);
-
-    close(client_fd).unwrap();
+        thread::spawn(move || {
+            handle_handshake(client_fd);
+            handle_session(client_fd);
+        });
+    }
 }
