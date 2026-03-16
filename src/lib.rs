@@ -1,5 +1,6 @@
+use nix::sys::socket::{SockaddrIn, SockaddrLike, getpeername};
 use nix::sys::socket::{
-    AddressFamily, Backlog, MsgFlags, SockFlag, SockType, SockaddrIn, accept, bind, listen, recv,
+    AddressFamily, Backlog, MsgFlags, SockFlag, SockType, accept, bind, listen, recv,
     send, setsockopt, socket, sockopt::ReuseAddr,
 };
 use nix::unistd::close;
@@ -11,8 +12,24 @@ pub use crate::http::{
     BadRequestError, InternalServerError, MethodNotAllowedError, NotFoundError, Request,
     RequestError, Response, ResponseError,
 };
+use crate::message::FrameError;
 pub use crate::message::{ClientMessage, Frame, ServerMessage};
-pub fn handle_handshake(fd: RawFd) -> () {
+
+use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+
+#[derive(Debug)]
+struct ConnState {
+    addr: SockaddrIn,
+    connected_at: std::time::Instant,
+}
+
+type ConnMap = Arc<Mutex<HashMap<RawFd, ConnState>>>;
+
+#[derive(Debug)]
+pub struct SessionError; 
+
+pub fn handle_handshake(fd: RawFd, conns: &ConnMap) -> () {
     let mut buf = [0u8; 1024];
     let n = recv(fd, &mut buf, MsgFlags::empty()).unwrap();
 
@@ -30,28 +47,49 @@ pub fn handle_handshake(fd: RawFd) -> () {
         Ok(request) => Response::try_from(&request),
         Err(err) => {
             send(fd, err.to_string().as_bytes(), MsgFlags::empty());
+            conns.lock().unwrap().remove(&fd); 
             return;
         }
     };
 
-    let response_string = match response {
-        Ok(response) => response.to_string(),
-        Err(ResponseError::NotFoundError) => NotFoundError.to_string(),
-        Err(ResponseError::InternalServerError) => InternalServerError.to_string(),
+    match response {
+        Ok(response) => {
+            let response_string = response.to_string();
+            send(fd, response_string.as_bytes(), MsgFlags::empty());
+        },
+        Err(ResponseError::NotFoundError) => {
+            let response_string = NotFoundError.to_string();
+            send(fd, response_string.as_bytes(), MsgFlags::empty());
+            conns.lock().unwrap().remove(&fd); 
+        },
+        Err(ResponseError::InternalServerError) => {
+            let response_string = InternalServerError.to_string();
+            send(fd, response_string.as_bytes(), MsgFlags::empty());
+            conns.lock().unwrap().remove(&fd); 
+        },
     };
 
-    send(fd, response_string.as_bytes(), MsgFlags::empty());
 }
 
-pub fn handle_session(fd: RawFd) -> () {
-    loop {
-        let client_message = ClientMessage::from(fd);
-        println!("{:?}", client_message);
+pub fn handle_session(fd: RawFd, conns: &ConnMap) -> Result<(), SessionError> {
 
-        let server_message = ServerMessage::from(&client_message).unwrap();
+    type Error = SessionError; 
+    loop {
+        let client_message = ClientMessage::from(fd, conns).unwrap();
+        // println!("{:?}", client_message);
+        
+        let message = ServerMessage::from(&client_message); 
+        
+        let server_message = match message {
+            Ok(res) => res, 
+            Err(val) => {
+                conns.lock().unwrap().remove(&fd);
+                return Err(SessionError);
+            }
+        };
 
         println!("{:?}", server_message);
-
+        
         for frame in server_message.frames {
             let server_frame_bytes = Frame::as_bytes(frame.clone());
 
@@ -70,6 +108,7 @@ pub fn handle_session(fd: RawFd) -> () {
                 }, 
                 8 => {
                     println!("Client closed connection");
+                    conns.lock().unwrap().remove(&fd);
                     close(fd).unwrap();
                     break;
                 }
@@ -83,9 +122,23 @@ pub fn handle_session(fd: RawFd) -> () {
         };
 
         if server_message.opcode == 8 {
+            
+            {
+                let guard = conns.lock().unwrap();
+
+                for (key, value) in guard.iter() {
+                    println!("{}: {:?}", key, value.addr.to_string());
+                }
+
+            }
+
             break;
+
+
         }; 
     }
+
+    return Ok(())
 }
 pub fn run() {
     let sock_addr = SockaddrIn::from_str("0.0.0.0:3000").unwrap();
@@ -102,24 +155,45 @@ pub fn run() {
 
     bind(fd.as_raw_fd(), &sock_addr).unwrap();
 
-    listen(&fd, Backlog::new(128).unwrap()).unwrap();
+    listen(&fd, Backlog::new(128).unwrap()).unwrap(); 
     
-    let mut client_fd: i32;
+    let connections: ConnMap = Arc::new(Mutex::new(HashMap::new()));
 
     loop {
-        
-        client_fd = accept(fd.as_raw_fd()).unwrap();
+        let mut client_fd: i32 = fd.as_raw_fd();
+
+        let connections = Arc::clone(&connections);
     
-        println!(
-            "IPV4 Address: {:?}, Port: {:?}",
-            &sock_addr.ip(),
-            &sock_addr.port()
-        );
-        println!("File descriptor: {:?}", &fd);
+        client_fd = accept(client_fd).unwrap();
+
+        let client_addr = getpeername(client_fd).unwrap(); 
+
+        connections.lock().unwrap().insert(client_fd, ConnState {
+            addr: client_addr,
+            connected_at: std::time::Instant::now(),
+        });
+    
+        // println!(
+        //     "IPV4 Address: {:?}, Port: {:?}",
+        //     &sock_addr.ip(),
+        //     &sock_addr.port()
+        // );
+        // println!("File descriptor: {:?}", &fd);
 
         thread::spawn(move || {
-            handle_handshake(client_fd);
-            handle_session(client_fd);
+
+            {
+                let guard = connections.lock().unwrap();
+
+                for (key, value) in guard.iter() {
+                    println!("{}: {:?}", key, value.addr.to_string());
+                }
+
+            }
+
+            handle_handshake(client_fd, &connections);
+            
+            handle_session(client_fd, &connections).unwrap();
         });
     }
 }
