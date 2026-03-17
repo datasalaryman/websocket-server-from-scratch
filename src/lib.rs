@@ -29,7 +29,7 @@ type ConnMap = Arc<Mutex<HashMap<RawFd, ConnState>>>;
 #[derive(Debug)]
 pub struct SessionError; 
 
-pub fn handle_handshake(fd: RawFd, conns: &ConnMap) -> () {
+pub fn handle_handshake(fd: RawFd, conns: &ConnMap) -> Result<(), SessionError> {
     let mut buf = [0u8; 1024];
     let n = recv(fd, &mut buf, MsgFlags::empty()).unwrap();
 
@@ -39,55 +39,42 @@ pub fn handle_handshake(fd: RawFd, conns: &ConnMap) -> () {
 
     let request_string = String::from_utf8_lossy(&buf[0..n]).to_string();
 
-    let request = Request::try_from(request_string.as_str());
+    let request_wrapped = Request::try_from(request_string.as_str());
 
-    let mut response: Result<Response, ResponseError>;
-
-    let response = match request {
+    let response = match request_wrapped {
         Ok(request) => Response::try_from(&request),
-        Err(err) => {
-            send(fd, err.to_string().as_bytes(), MsgFlags::empty());
-            conns.lock().unwrap().remove(&fd); 
-            return;
-        }
+        Err(_) => {
+            return Err(SessionError);
+        }, 
     };
 
     match response {
         Ok(response) => {
             let response_string = response.to_string();
             send(fd, response_string.as_bytes(), MsgFlags::empty());
-        },
+            return Ok(())
+        }, 
         Err(ResponseError::NotFoundError) => {
             let response_string = NotFoundError.to_string();
             send(fd, response_string.as_bytes(), MsgFlags::empty());
-            conns.lock().unwrap().remove(&fd); 
-        },
+            return Err(SessionError);
+        },  
         Err(ResponseError::InternalServerError) => {
             let response_string = InternalServerError.to_string();
             send(fd, response_string.as_bytes(), MsgFlags::empty());
-            conns.lock().unwrap().remove(&fd); 
+            return Err(SessionError);
         },
     };
-
 }
 
 pub fn handle_session(fd: RawFd, conns: &ConnMap) -> Result<(), SessionError> {
 
     type Error = SessionError; 
     loop {
-        let client_message = ClientMessage::from(fd, conns).unwrap();
+        let client_message = ClientMessage::from(fd).unwrap();
         // println!("{:?}", client_message);
         
-        let message = ServerMessage::from(&client_message); 
-        
-        let server_message = match message {
-            Ok(res) => res, 
-            Err(val) => {
-                conns.lock().unwrap().remove(&fd);
-                return Err(SessionError);
-            }
-        };
-
+        let server_message = ServerMessage::from(&client_message).unwrap(); 
         println!("{:?}", server_message);
         
         for frame in server_message.frames {
@@ -108,7 +95,7 @@ pub fn handle_session(fd: RawFd, conns: &ConnMap) -> Result<(), SessionError> {
                 }, 
                 8 => {
                     println!("Client closed connection");
-                    conns.lock().unwrap().remove(&fd);
+                    // conns.lock().unwrap().remove(&fd);
                     close(fd).unwrap();
                     break;
                 }
@@ -191,9 +178,24 @@ pub fn run() {
 
             }
 
-            handle_handshake(client_fd, &connections);
+            match handle_handshake(client_fd, &connections){
+                Ok(_) => println!("{} http handshake successful", client_fd),
+                Err(_) => {
+                    connections.lock().unwrap().remove(&client_fd);
+                    println!("Error in handshake. {} disconnected", client_fd);
+                },
+            };
             
-            handle_session(client_fd, &connections).unwrap();
+            match handle_session(client_fd, &connections) {
+                Ok(_) => {
+                    connections.lock().unwrap().remove(&client_fd);
+                    println!("{} safely disconnected", client_fd); 
+                },
+                Err(_) => {
+                    connections.lock().unwrap().remove(&client_fd);
+                    println!("Error in session. {} disconnected", client_fd); 
+                },
+            };
         });
     }
 }

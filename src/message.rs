@@ -190,20 +190,12 @@ pub struct ClientMessage {
 }
 
 impl ClientMessage {
-    pub fn from(fd: RawFd, conns: &ConnMap) -> Result<ClientMessage, FrameError> {
+    pub fn from(fd: RawFd) -> Result<ClientMessage, FrameError> {
         type Error = FrameError;
         let mut frames: Vec<Frame> = vec![];
         let mut message: String = String::new();
         loop {
-            let frame_wrapped = Frame::try_from(fd);
-
-            let frame = match frame_wrapped {
-                Ok(res) => res, 
-                Err(FrameError) => {
-                    conns.lock().unwrap().remove(&fd);
-                    return Err(FrameError); 
-                }
-            };
+            let frame = Frame::try_from(fd).unwrap();
 
             if frame.fin || frame.opcode == 0x8 {
                 frames.push(frame);
