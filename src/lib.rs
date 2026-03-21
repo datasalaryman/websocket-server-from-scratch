@@ -72,7 +72,7 @@ pub fn handle_session(fd: RawFd, conns: &ConnMap) -> Result<(), SessionError> {
     type Error = SessionError; 
     loop {
         let client_message = ClientMessage::from(fd).unwrap();
-        // println!("{:?}", client_message);
+        println!("{:?}", client_message);
         
         let server_message = ServerMessage::from(&client_message).unwrap(); 
         println!("{:?}", server_message);
@@ -95,7 +95,6 @@ pub fn handle_session(fd: RawFd, conns: &ConnMap) -> Result<(), SessionError> {
                 }, 
                 8 => {
                     println!("Client closed connection");
-                    // conns.lock().unwrap().remove(&fd);
                     close(fd).unwrap();
                     break;
                 }

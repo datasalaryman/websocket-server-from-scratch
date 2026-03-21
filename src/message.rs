@@ -159,11 +159,35 @@ impl Frame {
 
         bytes.push(fin_opcode);
 
+        let mut mask_payload_len: u8;
+
         println!("payload_len: {}", f.payload.len());
+        
+        if f.payload.len() <= 125 {
 
-        let mask_payload_len: u8 = ((0 as u8) << 7) | (f.payload.len() as u8);
+            mask_payload_len = ((0 as u8) << 7) | (f.payload.len() as u8);
+            bytes.push(mask_payload_len);
 
-        bytes.push(mask_payload_len);
+        } else if ( f.payload.len() as u16 ) < 65_535 {
+
+            mask_payload_len = ((0 as u8) << 7) | (126 as u8);
+            bytes.push(mask_payload_len);
+
+            let extended_len : [u8; 2] = (f.payload.len() as u16).to_be_bytes();
+            
+            bytes.extend(extended_len);
+
+        } else { 
+            
+            mask_payload_len = ((0 as u8) << 7) | (127 as u8);
+            bytes.push(mask_payload_len);
+
+            let extended_len : [u8; 8] = (f.payload.len() as u64).to_be_bytes();
+            
+            bytes.extend(extended_len);
+
+
+        }
 
         let payload = f.payload.clone();
 
